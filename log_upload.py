@@ -2,7 +2,6 @@ import requests
 import re
 from cabrillo.parser import parse_log_text
 from time import sleep
-import sys
 from pathlib import Path
 
 def submit_form_and_extract_field():
@@ -30,7 +29,7 @@ def submit_form_and_extract_field():
             get_response = session.get(url, timeout=10)
             get_response.raise_for_status()
         except Exception as e:
-            print(f"ERROR: NO response to GET request, exception {e}")
+            print(f"ERROR: NO response to GET request, exception {e} - STOPPING")
             return
 
         try:           
@@ -43,18 +42,19 @@ def submit_form_and_extract_field():
                 final_content = updated_content.replace("2025-09-21", "2026-09-20")
 
                 # Step 3: modify the form content based on the parsed values from the log file
-                print(f"creating form_data for {filename}")
+                # print(f"creating form_data for {filename}")
                 form_data = create_form_data(final_content, filename)
                 if form_data == None:
                     continue
 
                 # Step 4: HTTP POST Request with Form Data
-                print("Sending POST request...")
+                print(f"Sending POST request for file {filename}")
                 form_data["logdata"] = final_content
                 files = { "logfile": ("", b"")}
                 response = requests.post(url, data=form_data, files=files)            
                 response.raise_for_status()
-                print(response.status_code)
+                if str(response.status_code) != "200":
+                    print(f"ERROR: POST for {filename} failed with resonse: {response.status_code}")
 
                 # Step 5: Extract Content from Response and write back to file
                 # use regex to find the <pre></pre>tag
@@ -64,7 +64,7 @@ def submit_form_and_extract_field():
                     # was not processed successfully
                     print(f"ERROR: {filename} failed because {match.group(1)}")
                     print_form_data(form_data)
-                    sleep(3)
+                    sleep(5)
                     continue
                 match = re.search(r"<pre>(.*?)</pre>", response.text, re.DOTALL)
                 if match:
@@ -73,16 +73,21 @@ def submit_form_and_extract_field():
                     with open(filename, "w", encoding="utf-8") as file:
                         file.write(new_log)
                 else:
-                    print("ERROR: result field not found in response.")
+                    print(f"ERROR: result field for {filename} not found in response. Status: {response.status_code}\n*****")
+                    match = re.search(r"<p>Analysis of your uploaded log:<table>(.*?)</div>", response.text, re.DOTALL)
+                    if match:
+                        print(f'''{match.group(1).replace("\n", "")}''')
+                    print_form_data(form_data)
+                    form_data = {}
                     continue
 
                 # wait until next POST to not overload Bruce's website
-                sleep(3)
+                sleep(5)
 
         except FileNotFoundError:
-            print(f"Error: Local file '{filename}' was not found.")
+            print(f"Error: Local file {filename} was not found.")
         except requests.exceptions.RequestException as e:
-            print(f"ERROR: HTTP Request failed: {e}")
+            print(f"ERROR: HTTP Request failed for file {filename}:\nError: {e}")
             
     print("done")
 
@@ -153,13 +158,14 @@ def create_form_data(content, filename):
         }
     # parse the log text and fill in the form_data object
     try:
-        cab = parse_log_text(content, ignore_unknown_key=False, check_categories=False,
+        cab = parse_log_text(content, ignore_unknown_key=True, check_categories=False,
             ignore_order=True, check_mode=False)
     except Exception as e:
-        print(f"ERROR: cabillo parser failed to process {filename}")
+        print(f"*****\nERROR: cabrillo parser failed to process {filename}\n*****")
         return None
     if not cab:
         return None
+    cab.contest
     for key in convert:
         value = getattr(cab, key, "None")
         if value != None:
@@ -183,6 +189,8 @@ def create_form_data(content, filename):
             form_data['location'] = "TX"
         elif len(cab.qso) > 0 and cab.qso[0].de_exch[1] in list(counties):
             form_data['location'] = "TX"
+        elif cab.location == None and len(cab.qso) > 0:
+            cab.location = cab.qso[0].de_exch
         else:
             match = re.search(r"TX", cab.location.upper(), re.DOTALL)
             if match:
@@ -190,18 +198,16 @@ def create_form_data(content, filename):
             else:
                 form_data['location'] = "DX"
 
-    print_form_data(form_data)
+    # print_form_data(form_data)
     return form_data
 
 def print_form_data(form_data):
     form_data_keys = list(form_data.keys())
     del form_data_keys[-1]
-    print(f"form_data:")
+    print(f"form_data *****")
     for k in form_data_keys:
         print(f"{k}: {form_data[k]}")
-
-
-
+    print("*****")
 
 if __name__ == "__main__":
     submit_form_and_extract_field()
